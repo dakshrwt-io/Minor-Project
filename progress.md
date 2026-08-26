@@ -2,7 +2,7 @@
 
 ## Current status
 
-Phase 3 is in progress. The Python analyzer now indexes files, imports, top-level symbols, and internal module relationships.
+Phase 3 core work is complete. The agent includes a bounded, deterministic Python repository summary in each active prompt.
 
 ## Completed
 
@@ -36,6 +36,8 @@ Phase 3 is in progress. The Python analyzer now indexes files, imports, top-leve
 - Added deterministic observation compaction that retains recent full results and bounds older filesystem/test details in a short prompt summary.
 - Added AST-based Python file and import extraction, excluding common generated/environment directories and retaining parse errors as index issues.
 - Added top-level function, async-function, class, and variable extraction plus resolved internal import edges between indexed Python modules.
+- Added a bounded repository summarizer and passed one target-repository summary through ReAct state into every model prompt.
+- Refreshed the README to document the implemented Phases 1–3 capabilities, configuration, request flow, opt-in test command, safety boundaries, and remaining limits.
 
 ## Files touched
 
@@ -55,6 +57,8 @@ Phase 3 is in progress. The Python analyzer now indexes files, imports, top-leve
 - `app/intelligence/models.py`
 - `app/intelligence/python_analyzer.py`
 - `tests/unit/test_python_project_analyzer.py`
+- `app/intelligence/summary.py`
+- `tests/unit/test_python_project_summarizer.py`
 - `tests/unit/test_contracts.py`
 - `app/models/__init__.py`
 - `app/models/base.py`
@@ -107,10 +111,12 @@ Phase 3 is in progress. The Python analyzer now indexes files, imports, top-leve
 - `python -m pytest tests -q -p no:cacheprovider` passed: 38 tests, run with elevated filesystem access for pytest temporary target repositories.
 - `python -m pytest tests -q -p no:cacheprovider` passed: 41 tests, run with elevated filesystem access for pytest temporary target repositories.
 - `python -m pytest tests -q -p no:cacheprovider` passed: 42 tests, run with elevated filesystem access for pytest temporary target repositories.
+- `python -m pytest tests -q -p no:cacheprovider` passed: 46 tests, run with elevated filesystem access for pytest temporary target repositories.
+- README content manually reviewed against the current gateway, guardrails, test runner, session store, and Python analyzer behavior.
 
 ## Current step
 
-Phase 3 Python symbols and internal module relationships complete. Repository summaries are not yet available to the prompt.
+Phase 3 core session, context, and Python repository-intelligence work complete. ChromaDB remains deferred because no measurable demo need has been established.
 
 ## Open decisions
 
@@ -120,4 +126,4 @@ Phase 3 Python symbols and internal module relationships complete. Repository su
 
 ## Next step
 
-On explicit instruction, make only a bounded Python repository summary available to prompts.
+On explicit instruction, begin Phase 4 with only the MCP client adapter and common tool contract.

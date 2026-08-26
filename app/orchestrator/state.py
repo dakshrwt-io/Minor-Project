@@ -12,6 +12,7 @@ class ReActState(TypedDict):
     task: str
     target_root: Path
     apply_changes: bool
+    repository_summary: str
     plan: TaskPlan | None
     observations: list[ToolResult | TestResult]
     pending_call: ToolCall | None

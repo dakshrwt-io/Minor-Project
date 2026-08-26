@@ -18,6 +18,8 @@ from app.contracts import (
     ToolCall,
     ToolResult,
 )
+from app.intelligence.python_analyzer import PythonProjectAnalyzer
+from app.intelligence.summary import PythonProjectSummarizer
 from app.models.base import ModelClient
 from app.models.router import ModelRouter
 from app.memory.models import SessionRecord
@@ -40,6 +42,8 @@ class ReActOrchestrator:
         prompt_builder: PromptBuilder,
         max_iterations: int,
         session_store: SessionStore | None = None,
+        repository_analyzer: PythonProjectAnalyzer | None = None,
+        repository_summarizer: PythonProjectSummarizer | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -48,12 +52,17 @@ class ReActOrchestrator:
         self._prompt_builder = prompt_builder
         self._max_iterations = max_iterations
         self._session_store = session_store
+        self._repository_analyzer = repository_analyzer or PythonProjectAnalyzer()
+        self._repository_summarizer = repository_summarizer or PythonProjectSummarizer()
 
     async def run(self, request: AgentRequest) -> AgentResponse:
         """Execute one agent request against its explicitly supplied target root."""
 
         target_root = request.target_repo.resolve()
         session = self._create_session(target_root, request.task)
+        repository_summary = self._repository_summarizer.summarize(
+            self._repository_analyzer.analyze(target_root)
+        )
         tool = FilesystemTool(target_root, allow_changes=request.apply_changes)
         model = self._model_router.get_model()
         graph = self._build_graph(tool, model)
@@ -62,6 +71,7 @@ class ReActOrchestrator:
                 "task": request.task,
                 "target_root": target_root,
                 "apply_changes": request.apply_changes,
+                "repository_summary": repository_summary,
                 "plan": None,
                 "observations": [],
                 "pending_call": None,
@@ -104,6 +114,7 @@ class ReActOrchestrator:
                 target_root=state["target_root"],
                 apply_changes=state["apply_changes"],
                 observations=state["observations"],
+                repository_summary=state["repository_summary"],
             )
             response = await model.complete(prompt)
             return self._parse_action(response.text)

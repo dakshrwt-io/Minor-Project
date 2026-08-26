@@ -15,20 +15,26 @@ from app.prompts.builder import PromptBuilder
 
 
 class SequencedFakeModel(ModelClient):
-    def __init__(self, responses: Iterable[str]) -> None:
+    def __init__(self, responses: Iterable[str], requests: list[ModelRequest] | None = None) -> None:
         self._responses = iter(responses)
+        self._requests = requests
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
+        if self._requests is not None:
+            self._requests.append(request)
         return ModelResponse(text=next(self._responses), model_name="fake")
 
 
 def build_orchestrator(
-    responses: list[str], max_iterations: int = 2, session_store: SessionStore | None = None
+    responses: list[str],
+    max_iterations: int = 2,
+    session_store: SessionStore | None = None,
+    requests: list[ModelRequest] | None = None,
 ) -> ReActOrchestrator:
     settings = Settings.from_env({"AGENT_MODEL_PROVIDER": "anthropic"})
     router = ModelRouter(
         settings,
-        {ModelProvider.ANTHROPIC: lambda _: SequencedFakeModel(responses)},
+        {ModelProvider.ANTHROPIC: lambda _: SequencedFakeModel(responses, requests)},
     )
     return ReActOrchestrator(
         planner=DeterministicTaskPlanner(),
@@ -146,3 +152,16 @@ def test_react_graph_persists_the_completed_session_summary(tmp_path: Path) -> N
     assert session.task == "Review README"
     assert session.target_root == tmp_path.resolve()
     assert session.summary == "README requires no changes."
+
+
+def test_react_graph_includes_a_python_repository_summary_in_prompt(tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    requests: list[ModelRequest] = []
+    orchestrator = build_orchestrator(
+        ['{"kind":"final","summary":"Repository inspected."}'], requests=requests
+    )
+
+    asyncio.run(orchestrator.run(AgentRequest(task="Inspect repository", target_repo=tmp_path)))
+
+    context = json.loads(requests[0].messages[0].content.removeprefix("Current agent context:\n"))
+    assert "main (main.py): function run" in context["repository_summary"]

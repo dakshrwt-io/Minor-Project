@@ -95,10 +95,10 @@ Given a task and an explicit target repository path, the API can:
   - [x] Connect session creation and final summaries to gateway/orchestrator execution.
   - [x] Add bounded context compaction before prompt construction.
 - [ ] Add optional ChromaDB-backed semantic memory only if it improves the demo measurably.
-- [ ] Extract Python AST structure, imports, and symbols; make summaries available to prompts.
+- [x] Extract Python AST structure, imports, and symbols; make summaries available to prompts.
   - [x] Extract Python file structure, imports, and recoverable parse issues.
   - [x] Extract top-level symbols and relationships.
-  - [ ] Make bounded repository summaries available to prompts.
+  - [x] Make bounded repository summaries available to prompts.
 
 ### Phase 4 — MCP
 
@@ -133,4 +133,5 @@ Given a task and an explicit target repository path, the API can:
 
 ## Future improvements
 
+- Add optional ChromaDB memory only after it has a measurable demo benefit; retain the current SQLite/session and deterministic repository context otherwise.
 - Add provider fallbacks, streaming events, user confirmation UX, richer language analysis, git-aware diffs, and an IDE extension after the core workflow is proven.

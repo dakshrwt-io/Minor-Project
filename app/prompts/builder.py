@@ -23,6 +23,7 @@ class PromptBuilder:
         target_root: Path,
         apply_changes: bool,
         observations: list[ToolResult | TestResult],
+        repository_summary: str = "",
     ) -> ModelRequest:
         """Return a provider-neutral request for one ReAct iteration."""
 
@@ -32,6 +33,7 @@ class PromptBuilder:
             "target_root": str(target_root.resolve()),
             "task_plan": plan.model_dump(mode="json"),
             "apply_changes": apply_changes,
+            "repository_summary": repository_summary,
             "observation_summary": compacted_context.summary,
             "recent_observations": [
                 result.model_dump(mode="json") for result in compacted_context.recent_observations

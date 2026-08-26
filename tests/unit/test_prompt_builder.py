@@ -67,3 +67,18 @@ def test_prompt_builder_compacts_older_observations(tmp_path: Path) -> None:
     context = json.loads(request.messages[0].content.removeprefix("Current agent context:\n"))
     assert context["observation_summary"].startswith("Compacted 2 earlier observation(s):")
     assert context["recent_observations"][0]["output"] == "content 2"
+
+
+def test_prompt_builder_includes_repository_summary(tmp_path: Path) -> None:
+    plan = TaskPlan(goal="Inspect modules", steps=[TaskStep(id="inspect", description="Read files")])
+
+    request = PromptBuilder().build(
+        plan=plan,
+        target_root=tmp_path,
+        apply_changes=False,
+        observations=[],
+        repository_summary="Python repository index: 2 module(s), 1 internal import edge(s), 0 parse issue(s).",
+    )
+
+    context = json.loads(request.messages[0].content.removeprefix("Current agent context:\n"))
+    assert context["repository_summary"].startswith("Python repository index: 2 module")
