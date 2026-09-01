@@ -1,4 +1,18 @@
-"""AST-based extraction of Python project files and import relationships."""
+"""AST-based extraction of Python project files and import relationships.
+
+Single responsibility: turn a target repository into a PythonProjectIndex —
+every Python file with its module name, top-level symbols, and imports —
+plus the module-to-module relationship graph implied by those imports.
+
+In the request lifecycle this runs inside the orchestrator (per request, in a
+worker thread) before the ReAct loop starts: the index feeds the project
+summarizer, whose summary is embedded in the prompt the model sees, so the
+agent reasons about repo structure rather than guessing from file names.
+
+Non-obvious choice: only stdlib `ast` + `pathlib` are used — no tree-sitter
+or external indexer. Parse errors are captured as ParseIssue records instead
+of failing the whole analysis, so one broken file never blocks a request.
+"""
 
 from __future__ import annotations
 
@@ -159,20 +173,61 @@ class PythonProjectAnalyzer:
 
     @staticmethod
     def _import_targets(file: PythonFileInfo, reference: ImportReference) -> tuple[str, ...]:
+        """Resolve one import statement to fully-qualified candidate module names.
+
+        Worked example — `from ..models import Foo` inside app/orchestrator/graph.py:
+
+            file.module_name   = "app.orchestrator.graph"   (not a package __init__)
+            package_parts      = ["app", "orchestrator"]    (module path minus its
+                                                          own name, since graph.py is
+                                                          a module, not a package)
+            relative_level     = 2   (two dots: one dot = current package,
+                                      each extra dot = one package up)
+            parent_count       = 2 - 1 = 1   (level 1 stays in the current package;
+                                              every level beyond 1 climbs one parent)
+            base_parts         = ["app"]     (drop `parent_count` entries from the
+                                              right end of package_parts)
+            + reference.module = ["app", "models"]       ("models" appended)
+            base_module        = "app.models"
+
+        Candidates returned: {"app.models", "app.models.Foo"} — the package itself
+        (importing the package runs its __init__.py) and each imported name. Only
+        candidates that match a module actually present in the repo survive the
+        filter in _module_relationships, so stdlib/third-party imports drop out.
+
+        Absolute imports (relative_level == 0) skip the walk-up entirely:
+        `from fastapi import APIRouter` → {"fastapi", "fastapi.APIRouter"}.
+        """
+
         if reference.relative_level:
+            # Start from the importing module's own dotted path, then step up
+            # to its containing package. For __init__.py the module name IS
+            # the package, so nothing is dropped; for a plain module the last
+            # part (its own name) is removed.
             package_parts = file.module_name.split(".")
             if not file.is_package:
                 package_parts = package_parts[:-1]
+
+            # One dot = the containing package; each additional dot = one
+            # more package above it, hence (level - 1) parents to strip.
             parent_count = reference.relative_level - 1
             if parent_count > len(package_parts):
+                # More dots than available packages (e.g. ... from a top-level
+                # module) — the import cannot resolve inside this repo.
                 return ()
             base_parts = package_parts[: len(package_parts) - parent_count]
+
+            # `from ..pkg import y` names a subpackage/attribute below the
+            # anchor computed above; append it to the anchor.
             if reference.module:
                 base_parts.extend(reference.module.split("."))
             base_module = ".".join(base_parts)
         else:
             base_module = reference.module or ""
 
+        # Candidates: the imported module itself, plus each `from X import a, b`
+        # name as a child of it. An empty base (e.g. bare `import` with no
+        # module) contributes nothing on its own.
         targets = {base_module} if base_module and reference.module else set()
         if reference.names:
             targets.update(

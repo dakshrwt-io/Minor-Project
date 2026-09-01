@@ -1,10 +1,28 @@
-"""Deterministic, bounded compaction for active ReAct observations."""
+"""Deterministic, bounded compaction for active ReAct observations.
+
+Single responsibility: keep the prompt's observation context within bounds
+as the ReAct loop accumulates results. Called by the prompt builder on every
+`act` iteration.
+
+Design: recent observations stay verbatim (the model needs exact tool output
+to decide its next action), while older observations collapse into a
+one-line-each summary with a hard character cap. Compaction is deterministic
+— no model call, no embeddings — so the same observation list always yields
+the same summary, which keeps prompts reproducible and auditable.
+
+Note: the per-observation line format here mirrors client/formatting.py's
+describe_observation() (same excerpt limit and detail priority) but is
+deliberately separate: this module renders model-facing summaries from typed
+domain objects inside the server, while client/formatting.py renders
+human-facing transcript lines from response dicts in the client. Sharing one
+implementation would couple the app and client layers for ~15 lines.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.contracts import TestResult, ToolResult
+from app.contracts import ExternalToolResult, TestResult, ToolResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,7 +30,7 @@ class CompactedContext:
     """A short summary of older observations plus recent full observations."""
 
     summary: str
-    recent_observations: list[ToolResult | TestResult]
+    recent_observations: list[ToolResult | TestResult | ExternalToolResult]
 
 
 class ObservationCompactor:
@@ -28,8 +46,14 @@ class ObservationCompactor:
         self._max_recent_observations = max_recent_observations
         self._max_summary_characters = max_summary_characters
 
-    def compact(self, observations: list[ToolResult | TestResult]) -> CompactedContext:
-        """Return bounded prior context without dropping recent execution detail."""
+    def compact(
+        self, observations: list[ToolResult | TestResult | ExternalToolResult]
+    ) -> CompactedContext:
+        """Return bounded prior context without dropping recent execution detail.
+
+        When everything fits the recent window, the summary is empty — no
+        compaction happened, so the prompt carries none.
+        """
 
         if len(observations) <= self._max_recent_observations:
             return CompactedContext(summary="", recent_observations=list(observations))
@@ -45,13 +69,22 @@ class ObservationCompactor:
         )
 
     @staticmethod
-    def _describe(observation: ToolResult | TestResult) -> str:
+    def _describe(observation: ToolResult | TestResult | ExternalToolResult) -> str:
+        """Render one observation as a single summary line (model-facing)."""
+
         if isinstance(observation, ToolResult):
             outcome = "succeeded" if observation.succeeded else f"failed: {observation.error}"
             detail = observation.output or observation.error or "no output"
             return (
                 f"filesystem {observation.call.operation.value} {observation.call.path}: "
                 f"{outcome}; {ObservationCompactor._excerpt(detail)}"
+            )
+        if isinstance(observation, ExternalToolResult):
+            outcome = "succeeded" if observation.succeeded else f"failed: {observation.error}"
+            detail = " ".join(observation.content) or observation.error or "no output"
+            return (
+                f"external tool {observation.tool_name}: {outcome}; "
+                f"{ObservationCompactor._excerpt(detail)}"
             )
 
         outcome = "passed" if observation.passed else f"failed: {observation.error}"

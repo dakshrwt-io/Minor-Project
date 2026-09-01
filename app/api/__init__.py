@@ -1,1 +1,1 @@
-"""FastAPI routes for the coding-agent gateway."""
+"""HTTP gateway routes for one coding-agent invocation."""

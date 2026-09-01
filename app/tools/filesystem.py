@@ -1,18 +1,29 @@
-"""Target-root-confined filesystem operations for the Phase 1 agent."""
+"""Target-root-confined filesystem operations for the agent."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from app.contracts import FilesystemOperation, ToolCall, ToolResult
-from app.guardrails.policy import FilesystemPermissionPolicy
+
+_READ_ONLY_OPERATIONS = frozenset({FilesystemOperation.LIST, FilesystemOperation.READ})
 
 
 class FilesystemTool:
-    """Perform the limited file operations exposed to the first MVP.
+    """Perform the five file operations exposed to the agent.
+
+    list, read, create, write, and edit — nothing else. Deletion and shell
+    execution deliberately do not exist here, so no permission check is even
+    needed to reject them: the model cannot ask for what is not implemented.
 
     Every requested path is resolved against a fixed target repository root.
-    Paths outside that root, including traversal through ``..``, are rejected.
+    Paths outside that root — including traversal through ``..`` and absolute
+    paths pointing elsewhere — are rejected. Inspection is always allowed;
+    create/write/edit require ``allow_changes=True``.
+
+    Operations report failure as a ToolResult instead of raising: the ReAct
+    loop must be able to observe a failed action and let the model retry, and
+    one bad tool call must never crash the request.
     """
 
     name = "filesystem"
@@ -22,17 +33,22 @@ class FilesystemTool:
         if not resolved_root.is_dir():
             raise ValueError("target_root must be an existing directory")
         self._target_root = resolved_root
-        self._permission_policy = FilesystemPermissionPolicy(allow_changes=allow_changes)
+        self._allow_changes = allow_changes
 
     def execute(self, call: ToolCall) -> ToolResult:
-        """Execute one call and return an auditable result instead of raising."""
+        """Execute one call and return an auditable result instead of raising.
+
+        Order of checks: identity, then permission, then confinement, then
+        the operation itself — so the audit trail shows which gate rejected
+        a call, if any.
+        """
 
         if call.tool_name != self.name:
             return self._failure(call, f"tool '{call.tool_name}' is not handled by {self.name}")
 
-        decision = self._permission_policy.evaluate(call)
-        if not decision.allowed:
-            return self._failure(call, f"permission denied: {decision.reason}")
+        permission_error = self._check_permission(call)
+        if permission_error is not None:
+            return self._failure(call, permission_error)
 
         try:
             path = self._resolve_path(call.path)
@@ -52,7 +68,28 @@ class FilesystemTool:
 
         return self._failure(call, f"unsupported operation: {call.operation}")
 
+    def _check_permission(self, call: ToolCall) -> str | None:
+        """Return an error message when the operation is not authorized, else None."""
+
+        if call.operation in _READ_ONLY_OPERATIONS or self._allow_changes:
+            return None
+        return (
+            f"permission denied: {call.operation.value} operation requires "
+            "apply_changes=True on the agent request"
+        )
+
     def _resolve_path(self, requested_path: Path) -> Path:
+        """Confine one model-supplied path to the target root, or raise.
+
+        The target root is fixed at construction, but the path arrives fresh
+        from the model on every call, so it is re-resolved and re-validated
+        every time: ``resolve(strict=False)`` collapses ``..`` segments and
+        follows symlinks to their real location, and the ``relative_to`` check
+        then rejects anything that lands outside the root. Re-checking per
+        call (instead of trusting earlier validations) also catches symlink
+        escapes created by earlier agent writes during the same session.
+        """
+
         candidate = requested_path if requested_path.is_absolute() else self._target_root / requested_path
         resolved = candidate.resolve(strict=False)
         try:
@@ -78,13 +115,13 @@ class FilesystemTool:
         if path.exists():
             raise ValueError("create operation requires a path that does not exist")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self._content_argument(call), encoding="utf-8")
+        path.write_text(self._string_argument(call, "content"), encoding="utf-8")
         return self._success(call, f"created {path.relative_to(self._target_root).as_posix()}")
 
     def _write(self, call: ToolCall, path: Path) -> ToolResult:
         if not path.is_file():
             raise ValueError("write operation requires an existing file")
-        path.write_text(self._content_argument(call), encoding="utf-8")
+        path.write_text(self._string_argument(call, "content"), encoding="utf-8")
         return self._success(call, f"wrote {path.relative_to(self._target_root).as_posix()}")
 
     def _edit(self, call: ToolCall, path: Path) -> ToolResult:
@@ -93,15 +130,14 @@ class FilesystemTool:
         old_text = self._string_argument(call, "old_text")
         new_text = self._string_argument(call, "new_text")
         content = path.read_text(encoding="utf-8")
+        # Exactly-one-occurrence rule: zero matches would make the edit a
+        # silent no-op, several would make the replaced spot unpredictable —
+        # either way the model must narrow the anchor and retry.
         occurrences = content.count(old_text)
         if occurrences != 1:
             raise ValueError("edit operation requires old_text to occur exactly once")
         path.write_text(content.replace(old_text, new_text, 1), encoding="utf-8")
         return self._success(call, f"edited {path.relative_to(self._target_root).as_posix()}")
-
-    @staticmethod
-    def _content_argument(call: ToolCall) -> str:
-        return FilesystemTool._string_argument(call, "content")
 
     @staticmethod
     def _string_argument(call: ToolCall, name: str) -> str:

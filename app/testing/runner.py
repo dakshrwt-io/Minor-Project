@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 _CONFIG_FILE_NAME = ".coding-agent.toml"
 _DEFAULT_TIMEOUT_SECONDS = 60
 

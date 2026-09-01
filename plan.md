@@ -102,13 +102,24 @@ Given a task and an explicit target repository path, the API can:
 
 ### Phase 4 — MCP
 
-- [ ] Add an MCP client adapter conforming to the common tool contract.
-- [ ] Support configured external MCP servers and surface their schemas to the prompt builder.
+- [x] Add an MCP client adapter conforming to the common tool contract.
+- [x] Support configured external MCP servers and surface their schemas to the prompt builder.
+- [x] Execute model-issued MCP calls against live sessions with server-qualified routing and whitelist enforcement.
 
 ### Phase 5 — interaction layer
 
-- [ ] Add a minimal chat/terminal client for the gateway.
+- [x] Add a minimal chat/terminal client for the gateway.
 - [ ] Assess an IDE extension only after the core demo is stable.
+
+### Phase 6 — audit hardening (post-review fixes)
+
+Findings from a full code audit; fixes agreed as: 5 separate filesystem tools, auto-injected session summaries, LLM planner with deterministic fallback.
+
+- [x] Extend the provider-neutral model contract with native tool-use types (`ToolSpec`, `ModelToolCall`, `ModelRequest.tools`, `ModelResponse.tool_calls`) and implement them in the Anthropic and DeepSeek adapters.
+- [x] Move the ReAct loop and prompt builder onto native tool use: advertise filesystem operations as `fs_list`/`fs_read`/`fs_create`/`fs_write`/`fs_edit` plus external MCP tool schemas via `ModelRequest.tools`; advertise mutation tools only when `apply_changes` is set; parse `response.tool_calls` into `ToolCall`/`ExternalToolCall`; treat a text-only reply as the final summary; remove JSON-in-text parsing and the retry sentinel.
+- [x] Add an LLM-backed task planner (`submit_plan` tool call, validated into `TaskPlan`) with automatic fallback to the deterministic planner on any planning failure; make planning asynchronous.
+- [x] Read session memory back: add `SessionStore.list_recent(target_root, limit)` and inject up to 3 recent non-empty summaries for the same target root into prompt context.
+- [x] Stop blocking the event loop (audit findings C3/C4): run the subprocess test runner, repository AST analysis/summarization, filesystem tool execution, and SQLite session-store calls via `asyncio.to_thread`, keeping their synchronous APIs unchanged.
 
 ## Technical decisions
 

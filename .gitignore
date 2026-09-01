@@ -1,10 +1,36 @@
-.venv/
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tooling caches
 .pytest_cache/
-.test-tmp/
 .ruff_cache/
-.coverage
+.mypy_cache/
+.test-tmp/
+pytest-cache-files-*/
 htmlcov/
-.env
+.coverage
+.coverage.*
+
+# Runtime state
 data/
+*.sqlite3
+*.log
+
+# Secrets
+.env
+.env.local
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

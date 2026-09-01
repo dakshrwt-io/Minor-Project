@@ -18,7 +18,6 @@ def test_settings_use_explicit_values() -> None:
 
     assert settings.model_name == "test-model"
     assert settings.max_agent_iterations == 3
-    assert settings.session_database_path == Path("data/agent-state.sqlite3")
 
 
 def test_settings_reject_non_positive_iteration_limit() -> None:

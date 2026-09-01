@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from app.config import ModelProvider, Settings
 from app.models.anthropic import AnthropicModel
 from app.models.base import ModelClient
+from app.models.deepseek import DeepSeekModel
 
 ModelFactory = Callable[[Settings], ModelClient]
 
@@ -16,7 +17,13 @@ class ModelRouter:
 
     def __init__(self, settings: Settings, factories: Mapping[ModelProvider, ModelFactory] | None = None):
         self._settings = settings
-        self._factories = dict(factories or {ModelProvider.ANTHROPIC: AnthropicModel.from_settings})
+        self._factories = dict(
+            factories
+            or {
+                ModelProvider.ANTHROPIC: AnthropicModel.from_settings,
+                ModelProvider.DEEPSEEK: DeepSeekModel.from_settings,
+            }
+        )
 
     def get_model(self) -> ModelClient:
         try:
