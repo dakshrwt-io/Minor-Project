@@ -29,6 +29,11 @@ data/
 .env
 .env.local
 
+# Working notes (not part of the repository)
+DEMO.md
+plan.md
+progress.md
+
 # OS / editor noise
 .DS_Store
 Thumbs.db
