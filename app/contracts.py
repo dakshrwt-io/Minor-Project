@@ -1,26 +1,16 @@
-"""Typed contracts shared across the gateway, planner, orchestrator, and tools.
+"""Typed contracts for the gateway API boundary and tool results.
 
-Modeling style — pydantic vs dataclass: the rule is *boundaries*. Classes that
-cross a trust or serialization boundary are pydantic BaseModel: gateway
-request/response (JSON API), plans parsed from model output (untrusted, must
-validate), and tool/test/external results (validated invariants such as
-"success implies no error", plus serialization into the gateway response and
-the prompt context). Classes that are trusted internal
-value records — built by this codebase, never serialized for the API or
-validated against external input — are plain frozen dataclasses instead:
-`ExternalToolDefinition` here (an in-memory view of an MCP tool schema handed
-to the prompt builder),
-`TestCommand`/`TestRunResult` in testing/runner.py, the intelligence and MCP
-config records. Both styles are immutable by design; the split is about
-where validation and serialization pay for themselves, not about mutability.
+Only types that cross a real boundary live here: the gateway request/response
+models (JSON API), and the tool/test/external result records the response
+serializes (validated invariants such as "success implies no error").
+Internal orchestration shapes now belong to the OpenAI Agents SDK.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -51,13 +41,12 @@ class TaskStep(BaseModel):
 
 
 class TaskPlan(BaseModel):
-    """The planner's ordered representation of a user request.
+    """The plan reported for a request.
 
-    `relevant_files` lists repository paths the planner grounded the plan in
-    (from the repository summary), so the executing agent knows where to look
-    first; it is advisory, not a constraint. `steps` is empty exactly when the
-    router classified the message as conversation: the orchestrator then
-    short-circuits and the reply becomes the response summary.
+    Planning is delegated to the agent's own tool-vs-text decisions, so the
+    plan carries the restated goal; `steps` is populated only when an
+    up-front structured plan is produced (the single agent does not force
+    one), keeping the response shape stable for clients.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -67,46 +56,14 @@ class TaskPlan(BaseModel):
     relevant_files: list[str] = Field(default_factory=list)
 
 
-class RouteDecision(BaseModel):
-    """The router's classification of one user message.
-
-    Parsed from a forced `route_reply` tool call, so it is validated like
-    every other model-shaped payload: a `chat` decision must carry a
-    non-blank reply, and a `task` decision must carry none (the planner,
-    not the router, words the work).
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    route: Literal["chat", "task"]
-    reply: str = ""
-
-    @model_validator(mode="after")
-    def validate_reply(self) -> RouteDecision:
-        if self.route == "chat" and not self.reply.strip():
-            raise ValueError("a chat decision requires a non-blank reply")
-        if self.route == "task" and self.reply.strip():
-            raise ValueError("a task decision must not carry a reply")
-        return self
-
-
 class ToolCall(BaseModel):
-    """A requested, auditable call to a registered tool."""
+    """A requested, auditable call to a filesystem operation."""
 
     model_config = ConfigDict(frozen=True)
 
     tool_name: str = Field(min_length=1)
     operation: FilesystemOperation
     path: Path
-    arguments: dict[str, Any] = Field(default_factory=dict)
-
-
-class ExternalToolCall(BaseModel):
-    """A requested call to one advertised external MCP tool."""
-
-    model_config = ConfigDict(frozen=True)
-
-    tool_name: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -143,17 +100,8 @@ class TestResult(BaseModel):
     error: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class ExternalToolDefinition:
-    """A tool schema that can be exposed to the model without provider coupling."""
-
-    name: str
-    description: str
-    input_schema: dict[str, Any]
-
-
 class ExternalToolResult(BaseModel):
-    """An auditable result from one external-tool invocation."""
+    """An auditable result from one external-tool (MCP) invocation."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -178,8 +126,8 @@ class AgentRequest(BaseModel):
     `session_id` is optional and client-owned: the interactive REPL mints one
     at startup and sends it with every message, so its conversation shares one
     session; when it is absent the gateway mints a fresh id (single-shot
-    requests stay one-message-per-session). The id is only a memory key —
-    history lives in the gateway's volatile session store.
+    requests stay one-message-per-session). The id is the memory key for the
+    session store backed by `AGENT_SESSION_DB`.
     """
 
     task: str = Field(min_length=1)

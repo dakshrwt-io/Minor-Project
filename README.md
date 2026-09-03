@@ -1,37 +1,33 @@
 # Autonomous Coding Agent
 
-A demo-oriented autonomous coding agent for a college minor project. It accepts a natural-language task and an explicit target repository, plans a bounded sequence of actions, uses guarded filesystem tools, and returns an auditable result through FastAPI.
-
-> Follow [`DEMO.md`](DEMO.md) for a ~15 minute scripted walkthrough, including a keyless track that needs no API key.
+A demo-oriented autonomous coding agent for a college minor project. It accepts a natural-language task and an explicit target repository, drives a bounded tool-calling loop over guarded filesystem tools, and returns an auditable result through FastAPI. The orchestration layer is built on the [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) (`Agent` + `Runner`), with LiteLLM for multi-provider models.
 
 ## Current capabilities
 
 - FastAPI gateway: `POST /v1/agent/run` and `POST /v1/agent/run/stream` (server-sent live events)
-- Triage router: conversational messages answered directly; coding tasks handed to the planner
-- Session continuity in the REPL: one session per client run — follow-up messages reference earlier turns; bounded, volatile server-side memory
-- Bounded Plan → Act → Observe loop (plain async loop, no graph framework)
-- Anthropic and DeepSeek model adapters behind a provider-neutral model router
+- One OpenAI Agents SDK `Agent` driven by `Runner.run_streamed()`: the model decides when to call a tool and when to reply, inside a hard `max_turns` budget (`AGENT_MAX_ITERATIONS`)
+- Session continuity in the REPL: one session per client run — follow-up messages reference earlier turns, stored via the SDK's `SQLiteSession` with bounded replay
+- Anthropic and DeepSeek models through `LitellmModel`, selected by `AGENT_MODEL_PROVIDER`
 - Confined filesystem `list`, `read`, `create`, `write`, and exact-match `edit` actions
-- Explicit change authorization: mutations require `apply_changes: true`
-- Optional repository-owned test command, run after successful file changes
-- Self-contained volatile sessions: a fresh `session_id` per run, no persistence
+- Explicit change authorization: mutating tools are not even advertised to the model unless `apply_changes: true`
+- Optional repository-owned test command, auto-run after successful file changes and exposed as a `run_tests` tool
 - Python AST repository context: files, imports, top-level symbols, internal import edges, and parse issues
-- Bounded prompt context for observations and repository summaries
-- Configured stdio MCP servers: discovery of advertised tool schemas, surfaced as bounded native tool advertisements, with model-issued calls executed against live sessions
+- Bounded prompt context: repository summaries, MCP tool advertisements, and session replay are all capped
+- MCP servers (stdio or streamable-HTTP) through the SDK's MCP integration: advertised tool schemas are bounded, names are server-qualified, and one failed server never blocks the others
 - Terminal clients: single-shot CLI and an interactive Rich-based REPL with slash commands
 
 ## Architecture
 
 ```text
-HTTP gateway
-  → triage router (chat answered directly, tasks continue)
-  → task planner
-  → ReAct orchestrator (plain async loop)
-      → prompt builder → model router → provider adapter
-      → guarded filesystem tool
-      → optional target-repository test runner
-      → Python AST repository analyzer
-      → configured stdio MCP servers (tool-schema advertisement)
+HTTP gateway (app/api/routes.py)
+  → AgentRunner (app/agent.py)
+      → OpenAI Agents SDK Agent
+          → LitellmModel (Anthropic / DeepSeek)
+          → @function_tool filesystem tools (app/tools/filesystem.py)
+          → run_tests tool (app/testing/runner.py)
+          → MCPServerStdio / MCPServerStreamableHttp (bounded)
+      → BoundedSession over SQLiteSession (conversation memory)
+      → repository summary from the AST analyzer (app/intelligence/)
 ```
 
 The target repository is always supplied per request. The agent service repository is never assumed to be the target.
@@ -64,18 +60,18 @@ $env:AGENT_MODEL_PROVIDER = "anthropic"
 $env:AGENT_MODEL = "claude-sonnet-4-20250514"
 $env:AGENT_MODEL_BASE_URL = "https://proxy.example.com"   # optional; routes provider calls through a custom endpoint
 $env:AGENT_MAX_ITERATIONS = "6"
+$env:AGENT_SESSION_DB = "data/agent-state.sqlite3"        # optional; SQLite file for conversation memory
 $env:AGENT_MCP_SERVERS = '[{"name":"docs","command":"python","args":["-m","docs_server"]}]'
 ```
 
-`ANTHROPIC_API_KEY` is required only for live model-backed runs. Unit and integration tests use fake models and require no key. `AGENT_MODEL_BASE_URL` is optional; when set, the Anthropic adapter forwards it to the SDK as `base_url`, which supports proxies and gateway endpoints.
+`ANTHROPIC_API_KEY` is required only for live model-backed runs. Unit and integration tests use scripted models and require no key. `AGENT_MODEL_BASE_URL` is optional; when set, `LitellmModel` forwards it as `base_url`, which supports proxies and gateway endpoints.
 
 ### Providers
 
-- **Anthropic** (default): `AGENT_MODEL_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, model names like `claude-sonnet-4-20250514`.
-- **DeepSeek**: `AGENT_MODEL_PROVIDER=deepseek`, `DEEPSEEK_API_KEY`, `AGENT_MODEL=deepseek-chat` (or `deepseek-reasoner`). The adapter uses DeepSeek's OpenAI-compatible API (`https://api.deepseek.com`) and honors `AGENT_MODEL_BASE_URL` when set.
-- DeepSeek also exposes an Anthropic-compatible endpoint: keep the Anthropic provider and set `AGENT_MODEL_BASE_URL=https://api.deepseek.com/anthropic`.
+- **Anthropic** (default): `AGENT_MODEL_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, model names like `claude-sonnet-4-20250514`. Mapped to `LitellmModel(model="anthropic/<name>")`.
+- **DeepSeek**: `AGENT_MODEL_PROVIDER=deepseek`, `DEEPSEEK_API_KEY`, `AGENT_MODEL=deepseek-chat` (or `deepseek-reasoner`). Mapped to `LitellmModel(model="deepseek/<name>", base_url=...)`, defaulting to `https://api.deepseek.com` and honoring `AGENT_MODEL_BASE_URL`.
 
-`AGENT_MCP_SERVERS` is an optional JSON list of stdio MCP server entries, each with a `name`, `command`, and string `args`. The agent starts each configured server per request, collects its advertised tool schemas, and advertises them as bounded native tools alongside the filesystem tools. Tool names are server-qualified (`docs.search_docs`), so the model can invoke them; calls are routed back to the owning session, and only advertised names are callable. Startup failures and unknown tool names are reported to the prompt context or observation stream and never abort the request.
+`AGENT_MCP_SERVERS` is an optional JSON list of MCP server entries: a stdio server (`name`, `command`, string `args`) or a streamable-HTTP server (`name`, `url`). The agent connects each configured server per request and advertises its tools alongside the filesystem tools with server-qualified names (`mcp_demo__echo`). Advertisements are bounded (tool count, description length, schema size), and one failed server never blocks the others — its error is reported in the agent's instructions and the run continues.
 
 ## Run the API
 
@@ -112,7 +108,7 @@ Invoke-RestMethod -Method Post `
   -Body $body
 ```
 
-Set `apply_changes` to `$true` only when you authorize the agent to create, write, or edit files. The response includes a `session_id`, ordered plan, filesystem and test observations, status, and final summary.
+Set `apply_changes` to `$true` only when you authorize the agent to create, write, or edit files. The response includes a `session_id`, the task plan, filesystem and test observations, status, and final summary.
 
 ## Terminal client
 
@@ -153,18 +149,17 @@ falls back to the plain `POST /v1/agent/run` request-and-wait behavior; pass
 
 ### Conversation, not just tasks
 
-Every message is triaged first (`app/router/service.py`): greetings, small
-talk, and simple repository questions are answered directly without touching
-the planner, the loop, or the filesystem — a conversational message can
-never be turned into an invented coding task. Actionable requests flow to
-the planner and ReAct loop unchanged.
+There is no separate triage stage: the single agent decides on its own when a
+message is a question to answer in text and when it needs filesystem tools.
+Greetings and repository questions are answered without any tool call, so
+conversational messages never reach the filesystem.
 
 The interactive REPL keeps one session for its whole run: every message
-carries the same session id, the gateway remembers a bounded number of prior
-turns, and follow-ups like "my name is Daksh" → "what is my name" or
-"now add tests for it" work as expected. Closing the client (or `/new`)
-starts a fresh session; single-shot CLI invocations are one message per
-session by design.
+carries the same session id, the gateway replays the session's prior turns to
+the model (bounded to the most recent window), and follow-ups like "my name
+is Daksh" → "what is my name" or "now add tests for it" work as expected.
+Closing the client (or `/new`) starts a fresh session; single-shot CLI
+invocations are one message per session by design.
 
 ## Optional target-repository test command
 
@@ -176,23 +171,23 @@ command = ["python", "-m", "pytest", "-q"]
 timeout_seconds = 60
 ```
 
-The command is an argument list executed with `shell=False`; model output is never converted into a shell command. A failed test result is returned to the ReAct loop, which may attempt another repair while remaining within `AGENT_MAX_ITERATIONS`.
+The command is an argument list executed with `shell=False`; model output is never converted into a shell command. After each successful create, write, or edit the test result is returned to the agent as an observation, which may attempt another repair while remaining within `AGENT_MAX_ITERATIONS`. An explicit `run_tests` tool is also advertised for authorized runs.
 
 ## Safety boundaries
 
-- All file paths are resolved inside `target_repo`; traversal outside it is rejected.
+- All file paths are resolved inside `target_repo`; traversal (including via `..` or symlinks) is rejected on every call.
 - `list` and `read` are allowed by default.
-- `create`, `write`, and `edit` require explicit `apply_changes: true` authorization at the filesystem boundary.
+- `create`, `write`, and `edit` require explicit `apply_changes: true` authorization; without it those tools are never advertised to the model at all.
 - Deletion and arbitrary command execution are not available as agent tools.
 - Test commands must be opt-in through the target repository's `.coding-agent.toml` and have a timeout.
-- The action loop, prompt observation context, and repository summaries are all bounded.
+- The action budget (`AGENT_MAX_ITERATIONS`), MCP tool advertisements, session replay, and repository summaries are all bounded.
 
 ## Current limitations
 
 This project is intentionally scoped for a demonstrable academic prototype.
 
-- MCP servers are started per request and their tool calls are executed, but sessions are not reused across requests. Chat UI and IDE extension are not implemented.
-- Sessions are volatile: each run is self-contained, with no memory of previous runs and nothing persisted to disk.
+- MCP servers are connected per request and their tool calls are executed, but sessions are not reused across requests. Chat UI and IDE extension are not implemented.
+- Conversation memory is stored in SQLite (`AGENT_SESSION_DB`) so REPL sessions survive a gateway restart; sessions from different client runs remain isolated.
 - Repository intelligence currently supports Python AST analysis only.
 - ChromaDB semantic memory is deferred until it has a measurable benefit for the demo.
 - There is no interactive per-action confirmation UI.

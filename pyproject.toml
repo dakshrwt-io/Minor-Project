@@ -9,10 +9,9 @@ description = "An auditable autonomous coding agent for a college minor project.
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.50",
     "fastapi>=0.115",
     "mcp>=1.0",
-    "openai>=1.0",
+    "openai-agents[litellm]>=0.22",
     "pydantic>=2.10",
     "rich>=13.7",
     "uvicorn[standard]>=0.34",

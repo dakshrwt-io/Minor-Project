@@ -30,7 +30,6 @@ data/
 .env.local
 
 # Working notes (not part of the repository)
-DEMO.md
 plan.md
 progress.md
 
