@@ -7,7 +7,7 @@ A demo-oriented autonomous coding agent for a college minor project. It accepts 
 - FastAPI gateway: `POST /v1/agent/run` and `POST /v1/agent/run/stream` (server-sent live events)
 - One OpenAI Agents SDK `Agent` driven by `Runner.run_streamed()`: the model decides when to call a tool and when to reply, inside a hard `max_turns` budget (`AGENT_MAX_ITERATIONS`)
 - Session continuity in the REPL: one session per client run — follow-up messages reference earlier turns, stored via the SDK's `SQLiteSession` with bounded replay
-- Anthropic and DeepSeek models through `LitellmModel`, selected by `AGENT_MODEL_PROVIDER`
+- Anthropic, DeepSeek, and OpenRouter models through `LitellmModel`, selected by `AGENT_MODEL_PROVIDER`
 - Confined filesystem `list`, `read`, `create`, `write`, and exact-match `edit` actions
 - Explicit change authorization: mutating tools are not even advertised to the model unless `apply_changes: true`
 - Optional repository-owned test command, auto-run after successful file changes and exposed as a `run_tests` tool
@@ -22,7 +22,7 @@ A demo-oriented autonomous coding agent for a college minor project. It accepts 
 HTTP gateway (app/api/routes.py)
   → AgentRunner (app/agent.py)
       → OpenAI Agents SDK Agent
-          → LitellmModel (Anthropic / DeepSeek)
+          → LitellmModel (Anthropic / DeepSeek / OpenRouter)
           → @function_tool filesystem tools (app/tools/filesystem.py)
           → run_tests tool (app/testing/runner.py)
           → MCPServerStdio / MCPServerStreamableHttp (bounded)
@@ -50,29 +50,6 @@ python -m ruff check app tests
 python -m ruff format --check app tests
 ```
 
-## Configuration
-
-Copy values from `.env.example` into your environment. The application reads environment variables directly and also loads a repository-root `.env` file at startup; real environment variables always win over `.env` values.
-
-```powershell
-$env:ANTHROPIC_API_KEY = "your-key"
-$env:AGENT_MODEL_PROVIDER = "anthropic"
-$env:AGENT_MODEL = "claude-sonnet-4-20250514"
-$env:AGENT_MODEL_BASE_URL = "https://proxy.example.com"   # optional; routes provider calls through a custom endpoint
-$env:AGENT_MAX_ITERATIONS = "6"
-$env:AGENT_SESSION_DB = "data/agent-state.sqlite3"        # optional; SQLite file for conversation memory
-$env:AGENT_MCP_SERVERS = '[{"name":"docs","command":"python","args":["-m","docs_server"]}]'
-```
-
-`ANTHROPIC_API_KEY` is required only for live model-backed runs. Unit and integration tests use scripted models and require no key. `AGENT_MODEL_BASE_URL` is optional; when set, `LitellmModel` forwards it as `base_url`, which supports proxies and gateway endpoints.
-
-### Providers
-
-- **Anthropic** (default): `AGENT_MODEL_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, model names like `claude-sonnet-4-20250514`. Mapped to `LitellmModel(model="anthropic/<name>")`.
-- **DeepSeek**: `AGENT_MODEL_PROVIDER=deepseek`, `DEEPSEEK_API_KEY`, `AGENT_MODEL=deepseek-chat` (or `deepseek-reasoner`). Mapped to `LitellmModel(model="deepseek/<name>", base_url=...)`, defaulting to `https://api.deepseek.com` and honoring `AGENT_MODEL_BASE_URL`.
-
-`AGENT_MCP_SERVERS` is an optional JSON list of MCP server entries: a stdio server (`name`, `command`, string `args`) or a streamable-HTTP server (`name`, `url`). The agent connects each configured server per request and advertises its tools alongside the filesystem tools with server-qualified names (`mcp_demo__echo`). Advertisements are bounded (tool count, description length, schema size), and one failed server never blocks the others — its error is reported in the agent's instructions and the run continues.
-
 ## Run the API
 
 From the repository root, either start it directly:
@@ -81,7 +58,7 @@ From the repository root, either start it directly:
 python -m uvicorn app.main:app --reload
 ```
 
-or use the helper, which warns when `ANTHROPIC_API_KEY` is missing in the current terminal:
+or use the helper, which warns when the configured provider's key is missing in the current terminal:
 
 ```powershell
 .\start_gateway.ps1
@@ -90,6 +67,29 @@ or use the helper, which warns when `ANTHROPIC_API_KEY` is missing in the curren
 The interactive API schema is then available at `http://127.0.0.1:8000/docs`. The root path `/` intentionally returns 404; the agent endpoint is `POST /v1/agent/run`.
 
 > Restart uvicorn after changing environment variables: `--reload` only watches source files, and the worker inherits the launch shell's environment.
+
+## Try it: interactive REPL (Terminal client)
+
+With the gateway running, open the interactive client in a second terminal Where you want to code:
+
+```powershell
+python -m client --interactive --target-repo "C:\path\to\demo-repository"
+```
+
+The REPL keeps one session for its whole run: every message carries the same session id, the gateway replays prior turns to the model, and follow-ups like "my name is Daksh" → "what is my name" or "now add tests for it" work as expected. Slash commands: `/apply`, `/repo <path>`, `/base-url <url>`, `/clear`, `/new`, `/help`, `/quit`, `/exit`.
+
+## Configuration
+
+Copy values from `.env.example` into your environment. The application reads environment variables directly and also loads a repository-root `.env` file at startup
+
+
+### Providers
+
+- **Anthropic** (default): `AGENT_MODEL_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, model names like `claude-sonnet-4-20250514`. Mapped to `LitellmModel(model="anthropic/<name>")`.
+- **DeepSeek**: `AGENT_MODEL_PROVIDER=deepseek`, `DEEPSEEK_API_KEY`, `AGENT_MODEL=deepseek-chat` (or `deepseek-reasoner`). Mapped to `LitellmModel(model="deepseek/<name>", base_url=...)`, defaulting to `https://api.deepseek.com` and honoring `AGENT_MODEL_BASE_URL`.
+- **OpenRouter**: `AGENT_MODEL_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, model names in `vendor/model` form (e.g. `anthropic/claude-sonnet-4`, `meta-llama/llama-3.3-70b-instruct`; the gateway adds the `openrouter/` LiteLLM prefix itself). Default base URL is `https://openrouter.ai/api/v1`, honored alongside `AGENT_MODEL_BASE_URL`.
+
+`AGENT_MCP_SERVERS` is an optional JSON list of MCP server entries: a stdio server (`name`, `command`, string `args`) or a streamable-HTTP server (`name`, `url`). The agent connects each configured server per request and advertises its tools alongside the filesystem tools with server-qualified names (`mcp_demo__echo`). Advertisements are bounded (tool count, description length, schema size), and one failed server never blocks the others — its error is reported in the agent's instructions and the run continues.
 
 ## Invoke the agent
 
@@ -121,17 +121,10 @@ python -m client --task "Read the README and summarize the smallest documentatio
   --target-repo "C:\path\to\demo-repository"
 ```
 
-Interactive REPL (Claude-Code style):
-
-```powershell
-python -m client --interactive --target-repo "C:\path\to\demo-repository"
-```
-
-The REPL keeps the gateway, target repository, and change authorization in a
-header, streams each action and observation live as the agent works, and
-renders the final result in a colored panel with plan steps, status, session
-id, and summary. Slash commands: `/apply`, `/repo <path>`, `/base-url <url>`,
-`/clear`, `/help`, `/quit`, `/exit`.
+The interactive mode is shown in the quick start above. It keeps the gateway,
+target repository, and change authorization in a header, streams each action
+and observation live as the agent works, and renders the final result in a
+colored panel with plan steps, status, session id, and summary.
 
 Add `--apply-changes` to authorize file mutations (or `/apply` in the REPL),
 `--base-url` to point at a different gateway, and `--timeout` to bound the
@@ -152,14 +145,9 @@ falls back to the plain `POST /v1/agent/run` request-and-wait behavior; pass
 There is no separate triage stage: the single agent decides on its own when a
 message is a question to answer in text and when it needs filesystem tools.
 Greetings and repository questions are answered without any tool call, so
-conversational messages never reach the filesystem.
-
-The interactive REPL keeps one session for its whole run: every message
-carries the same session id, the gateway replays the session's prior turns to
-the model (bounded to the most recent window), and follow-ups like "my name
-is Daksh" → "what is my name" or "now add tests for it" work as expected.
-Closing the client (or `/new`) starts a fresh session; single-shot CLI
-invocations are one message per session by design.
+conversational messages never reach the filesystem. Closing the REPL client
+(or `/new`) starts a fresh session; single-shot CLI invocations are one
+message per session by design.
 
 ## Optional target-repository test command
 

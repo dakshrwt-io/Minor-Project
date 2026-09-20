@@ -36,7 +36,7 @@ AgentRunner (app/agent.py)                            -- per-request preparation
         |     BoundedSession over SQLiteSession
         v
 SDK Agent (instructions + tools + model)
-        |-- LitellmModel: anthropic/<name> or deepseek/<name>
+        |-- LitellmModel: anthropic/<name>, deepseek/<name>, or openrouter/<name>
         |-- @function_tool filesystem tools (app/tools/filesystem.py)
         |-- run_tests tool (app/testing/runner.py)
         v
@@ -66,8 +66,11 @@ summary, session_id out.
 One module owns everything the SDK needs per request:
 
 - **Model**: `build_model()` maps `AGENT_MODEL_PROVIDER` to
-  `LitellmModel(model="anthropic/<name>")` or
-  `LitellmModel(model="deepseek/<name>", base_url=...)`. The API key is
+  `LitellmModel(model="anthropic/<name>")`,
+  `LitellmModel(model="deepseek/<name>", base_url=...)`, or
+  `LitellmModel(model="openrouter/<name>", base_url="https://openrouter.ai/api/v1")`.
+  OpenRouter model names carry the vendor prefix twice
+  (e.g. `openrouter/anthropic/claude-sonnet-4`). The API key is
   checked before any error handling, so configuration problems surface as
   HTTP 400 instead of being masked downstream.
 - **Tools**: `filesystem_tools()` wraps the existing `FilesystemTool` as
