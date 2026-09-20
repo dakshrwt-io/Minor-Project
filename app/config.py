@@ -13,6 +13,7 @@ from pathlib import Path
 class ModelProvider(str, Enum):
     ANTHROPIC = "anthropic"
     DEEPSEEK = "deepseek"
+    OPENROUTER = "openrouter"
 
 
 class McpConfigError(ValueError):
@@ -75,6 +76,7 @@ class Settings:
 
     anthropic_api_key: str | None
     deepseek_api_key: str | None
+    openrouter_api_key: str | None
     model_provider: ModelProvider
     model_name: str
     model_base_url: str | None
@@ -106,6 +108,7 @@ class Settings:
         return cls(
             anthropic_api_key=source.get("ANTHROPIC_API_KEY") or None,
             deepseek_api_key=source.get("DEEPSEEK_API_KEY") or None,
+            openrouter_api_key=source.get("OPENROUTER_API_KEY") or None,
             model_provider=provider,
             model_name=source.get("AGENT_MODEL", "claude-sonnet-4-20250514"),
             model_base_url=source.get("AGENT_MODEL_BASE_URL") or None,
