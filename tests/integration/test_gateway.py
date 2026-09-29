@@ -20,6 +20,22 @@ def _make_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _stream_events(client: TestClient, target_repo: Path, **overrides: object) -> list[dict]:
+    body: dict[str, object] = {
+        "task": "Review the README",
+        "target_repo": str(target_repo),
+        "apply_changes": False,
+    }
+    body.update(overrides)
+    with client.stream("POST", "/v1/agent/run/stream", json=body) as response:
+        assert response.status_code == 200
+        return [
+            json.loads(line[len("data: ") :])
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+
 def test_gateway_runs_agent_against_explicit_target_repository(tmp_path: Path) -> None:
     model = ScriptedModel(
         [
@@ -29,21 +45,19 @@ def test_gateway_runs_agent_against_explicit_target_repository(tmp_path: Path) -
     )
     client = TestClient(create_app(AgentRunner(_settings(), model=model)))
 
-    response = client.post(
-        "/v1/agent/run",
-        json={
-            "task": "Review the README",
-            "target_repo": str(_make_repo(tmp_path)),
-            "apply_changes": False,
-        },
-    )
+    events = _stream_events(client, _make_repo(tmp_path))
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "completed"
-    assert body["summary"] == "README reviewed."
-    assert body["observations"][0]["output"] == "Gateway demo"
-    assert body["plan"]["goal"] == "Review the README"
+    assert events[0]["type"] == "plan"
+    assert events[0]["plan"]["goal"] == "Review the README"
+    assert events[1]["type"] == "action"
+    assert events[1]["name"] == "fs_read"
+    assert events[2]["type"] == "observation"
+    assert events[2]["observation"]["output"] == "Gateway demo"
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["status"] == "completed"
+    assert done["summary"] == "README reviewed."
+    assert done["response"]["observations"][0]["output"] == "Gateway demo"
 
 
 def test_gateway_stream_endpoint_emits_live_sse_events(tmp_path: Path) -> None:
@@ -116,27 +130,12 @@ def test_gateway_keeps_sessions_isolated_and_persisted(tmp_path: Path, tmp_path_
     client = TestClient(
         create_app(AgentRunner(_settings(AGENT_SESSION_DB=str(db_path)), model=model))
     )
-    body = {"task": "hello", "target_repo": str(tmp_path), "apply_changes": False}
 
-    first = client.post("/v1/agent/run", json={**body, "session_id": "repl-42"})
-    second = client.post("/v1/agent/run", json={**body, "task": "what is my name"})
+    first = _stream_events(client, tmp_path, session_id="repl-42")
+    second = _stream_events(client, tmp_path, task="what is my name")
 
-    assert first.status_code == 200
-    assert first.json()["session_id"] == "repl-42"
-    assert second.status_code == 200
-    assert second.json()["session_id"] != "repl-42"  # no id supplied: fresh session
-
-
-def test_gateway_maps_missing_provider_key_to_http_400(tmp_path: Path) -> None:
-    client = TestClient(create_app(AgentRunner(_settings(ANTHROPIC_API_KEY=""))))
-
-    response = client.post(
-        "/v1/agent/run",
-        json={"task": "hello", "target_repo": str(tmp_path), "apply_changes": False},
-    )
-
-    assert response.status_code == 400
-    assert "ANTHROPIC_API_KEY" in response.json()["detail"]
+    assert first[-1]["response"]["session_id"] == "repl-42"
+    assert second[-1]["response"]["session_id"] != "repl-42"  # no id supplied: fresh session
 
 
 def test_gateway_stream_reports_provider_configuration_errors(tmp_path: Path) -> None:

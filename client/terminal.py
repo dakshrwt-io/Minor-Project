@@ -1,4 +1,4 @@
-"""Single-shot terminal client for the gateway's agent endpoint.
+"""Single-shot terminal client for the gateway's streaming agent endpoint.
 
 Uses only the standard library so the demo client needs no extra dependencies.
 Run from the repository root: ``python -m client --task ... --target-repo ...``
@@ -19,10 +19,6 @@ from client.formatting import describe_action, describe_observation
 
 _SSE_PREFIX = "data: "
 _TERMINAL_EVENTS = {"done", "error"}
-
-
-class StreamUnavailable(RuntimeError):
-    """The gateway has no streaming endpoint; the caller should fall back."""
 
 
 def build_payload(
@@ -48,31 +44,6 @@ def build_payload(
     return payload
 
 
-def post_request(base_url: str, payload: dict[str, object], timeout: float) -> dict[str, Any]:
-    """POST the payload to the agent endpoint and return the JSON response."""
-
-    endpoint = f"{base_url.rstrip('/')}/v1/agent/run"
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            body = json.loads(exc.read().decode("utf-8"))
-            detail = f": {body.get('detail', '')}"
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            pass
-        raise RuntimeError(f"gateway returned HTTP {exc.code}{detail}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise RuntimeError(f"gateway unreachable at {endpoint}: {exc}") from exc
-
-
 def stream_request(
     base_url: str,
     payload: dict[str, object],
@@ -83,8 +54,7 @@ def stream_request(
 
     Parses server-sent events (`data: <json>` lines) as they arrive and calls
     `on_event` for each, so callers can render progress in real time. Returns
-    the terminal event (`done` or `error`). Raises StreamUnavailable when the
-    gateway predates the streaming endpoint (HTTP 404).
+    the terminal event (`done` or `error`).
     """
 
     endpoint = f"{base_url.rstrip('/')}/v1/agent/run/stream"
@@ -105,8 +75,6 @@ def stream_request(
                 if event.get("type") in _TERMINAL_EVENTS:
                     return event
     except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            raise StreamUnavailable(f"no streaming endpoint at {endpoint}") from exc
         detail = ""
         try:
             body = json.loads(exc.read().decode("utf-8"))
@@ -117,30 +85,6 @@ def stream_request(
     except (urllib.error.URLError, TimeoutError) as exc:
         raise RuntimeError(f"gateway unreachable at {endpoint}: {exc}") from exc
     raise RuntimeError("gateway closed the stream before the run finished")
-
-
-def render(response: dict[str, Any]) -> str:
-    """Render one agent response as a readable terminal transcript."""
-
-    lines: list[str] = []
-    plan = response.get("plan", {})
-    lines.append(f"Task: {plan.get('goal', '')}")
-    for index, step in enumerate(plan.get("steps", []), start=1):
-        lines.append(f"  {index}. [{step.get('status', 'pending')}] {step.get('description', '')}")
-    status = response.get("status", "unknown")
-    lines.append(f"Status: {status}")
-    session_id = response.get("session_id")
-    if session_id:
-        lines.append(f"Session: {session_id}")
-    summary = response.get("summary", "")
-    if summary:
-        lines.append(f"Summary: {summary}")
-    observations = response.get("observations", [])
-    if observations:
-        lines.append("Observations:")
-        for observation in observations:
-            lines.append(f"  - {describe_observation(observation)}")
-    return "\n".join(lines)
 
 
 def render_event(event: dict[str, Any]) -> list[str]:
@@ -207,11 +151,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="gateway base URL (default: http://127.0.0.1:8000)",
     )
     parser.add_argument(
-        "--no-stream",
-        action="store_true",
-        help="wait for the finished response instead of streaming live progress",
-    )
-    parser.add_argument(
         "--timeout", type=float, default=120.0, help="request timeout in seconds (default: 120)"
     )
     return parser
@@ -240,30 +179,19 @@ def main(argv: list[str] | None = None) -> int:
     if not args.task:
         build_parser().error("the following argument is required: --task (unless --interactive)")
     payload = build_payload(args.task, args.target_repo, args.apply_changes)
-    if not args.no_stream:
-        try:
-            event = stream_request(
-                args.base_url,
-                payload,
-                args.timeout,
-                lambda received: print("\n".join(render_event(received))),
-            )
-        except StreamUnavailable:
-            pass  # older gateway: fall through to the plain POST below
-        except RuntimeError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 2
-        else:
-            if event.get("type") == "error":
-                return 2
-            return 0 if event.get("status") == "completed" else 1
     try:
-        response = post_request(args.base_url, payload, args.timeout)
+        event = stream_request(
+            args.base_url,
+            payload,
+            args.timeout,
+            lambda received: print("\n".join(render_event(received))),
+        )
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    print(render(response))
-    return 0 if response.get("status") == "completed" else 1
+    if event.get("type") == "error":
+        return 2
+    return 0 if event.get("status") == "completed" else 1
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ A demo-oriented autonomous coding agent for a college minor project. It accepts 
 
 ## Current capabilities
 
-- FastAPI gateway: `POST /v1/agent/run` and `POST /v1/agent/run/stream` (server-sent live events)
+- FastAPI gateway: `POST /v1/agent/run/stream` (server-sent live events: plan, actions, observations, and the final result)
 - One OpenAI Agents SDK `Agent` driven by `Runner.run_streamed()`: the model decides when to call a tool and when to reply, inside a hard `max_turns` budget (`AGENT_MAX_ITERATIONS`)
 - Session continuity in the REPL: one session per client run — follow-up messages reference earlier turns, stored via the SDK's `SQLiteSession` with bounded replay
 - Anthropic, DeepSeek, and OpenRouter models through `LitellmModel`, selected by `AGENT_MODEL_PROVIDER`
@@ -64,7 +64,7 @@ or use the helper, which warns when the configured provider's key is missing in 
 .\start_gateway.ps1
 ```
 
-The interactive API schema is then available at `http://127.0.0.1:8000/docs`. The root path `/` intentionally returns 404; the agent endpoint is `POST /v1/agent/run`.
+The interactive API schema is then available at `http://127.0.0.1:8000/docs`. The root path `/` intentionally returns 404; the agent endpoint is `POST /v1/agent/run/stream`.
 
 > Restart uvicorn after changing environment variables: `--reload` only watches source files, and the worker inherits the launch shell's environment.
 
@@ -102,13 +102,15 @@ $body = @{
   apply_changes = $false
 } | ConvertTo-Json
 
-Invoke-RestMethod -Method Post `
-  -Uri "http://127.0.0.1:8000/v1/agent/run" `
+Invoke-WebRequest -Method Post `
+  -Uri "http://127.0.0.1:8000/v1/agent/run/stream" `
   -ContentType "application/json" `
   -Body $body
 ```
 
-Set `apply_changes` to `$true` only when you authorize the agent to create, write, or edit files. The response includes a `session_id`, the task plan, filesystem and test observations, status, and final summary.
+The response is a server-sent event stream: a `plan` event restates the goal, `action` and `observation` events arrive as each tool call happens, and a terminal `done` event carries the full result — `session_id`, the task plan, filesystem and test observations, status, and final summary. A terminal `error` event carries the HTTP-equivalent status code (`400` for configuration problems, `502` for provider or SDK failures).
+
+Set `apply_changes` to `$true` only when you authorize the agent to create, write, or edit files.
 
 ## Terminal client
 
@@ -133,12 +135,9 @@ request. The single-shot client exits `0` on completed, `1` on agent failed,
 
 ### Live progress streaming
 
-By default the client consumes `POST /v1/agent/run/stream` (server-sent
-events): the plan, each tool action, and each observation arrive as they
-happen and are printed immediately, with a final `done` event carrying the
-full response. If the gateway predates the streaming endpoint, the client
-falls back to the plain `POST /v1/agent/run` request-and-wait behavior; pass
-`--no-stream` to force that mode.
+The client consumes `POST /v1/agent/run/stream` (server-sent events): the
+plan, each tool action, and each observation arrive as they happen and are
+printed immediately, with a final `done` event carrying the full response.
 
 ### Conversation, not just tasks
 

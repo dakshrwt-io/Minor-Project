@@ -1,9 +1,9 @@
 import io
+from typing import Any
 
 from rich.console import Console
 
 from client.interactive import InteractiveClient, parse_command, render_response
-from client.terminal import StreamUnavailable
 
 
 def test_parse_command_splits_slash_commands() -> None:
@@ -63,11 +63,25 @@ def test_render_response_marks_failure_and_escapes_content() -> None:
     assert "[red]\u2717[/] external [cyan]docs.missing[/]" in transcript
 
 
+def done_event(summary: str) -> dict[str, Any]:
+    return {
+        "type": "done",
+        "status": "completed",
+        "summary": summary,
+        "response": {
+            "session_id": "s-1",
+            "plan": {"goal": "G", "steps": []},
+            "status": "completed",
+            "summary": summary,
+        },
+    }
+
+
 def make_repl(
     lines: list[str],
     target_repo,
     monkeypatch,
-    post_impl,
+    fake_stream,
     apply_changes: bool = False,
 ) -> io.StringIO:
     buffer = io.StringIO()
@@ -80,10 +94,7 @@ def make_repl(
     )
     responses = iter(lines)
 
-    def unavailable(*_args, **_kwargs):
-        raise StreamUnavailable("no streaming endpoint")
-
-    monkeypatch.setattr("client.interactive.stream_request", unavailable)
+    monkeypatch.setattr("client.interactive.stream_request", fake_stream)
     monkeypatch.setattr(
         "client.interactive.Console.input",
         lambda self, prompt="", password=False, stream=None: next(responses),
@@ -156,20 +167,14 @@ def test_repl_streams_live_events_and_finishes_with_a_panel(tmp_path, monkeypatc
 def test_repl_runs_tasks_and_quits(tmp_path, monkeypatch) -> None:
     payloads = []
 
-    def fake_post(base_url, payload, timeout):
+    def fake_stream(base_url, payload, timeout, on_event):
         payloads.append(payload)
-        return {
-            "plan": {"goal": "Fix it", "steps": []},
-            "status": "completed",
-            "summary": "Fixed.",
-            "observations": [],
-        }
+        on_event(done_event("Fixed."))
+        return done_event("Fixed.")
 
-    monkeypatch.setattr("client.interactive.post_request", fake_post)
-    buffer = make_repl(["Fix the greeting", "/quit"], tmp_path, monkeypatch, fake_post)
+    buffer = make_repl(["Fix the greeting", "/quit"], tmp_path, monkeypatch, fake_stream)
 
     output = buffer.getvalue()
-    assert "Fix it" in output
     assert "Fixed." in output
     assert "Bye." in output
     assert payloads[0]["task"] == "Fix the greeting"
@@ -178,13 +183,13 @@ def test_repl_runs_tasks_and_quits(tmp_path, monkeypatch) -> None:
 def test_repl_apply_toggle_flows_into_the_payload(tmp_path, monkeypatch) -> None:
     payloads = []
 
-    def fake_post(base_url, payload, timeout):
+    def fake_stream(base_url, payload, timeout, on_event):
         payloads.append(payload)
-        return {"plan": {"goal": "G", "steps": []}, "status": "completed", "summary": ""}
+        on_event(done_event(""))
+        return done_event("")
 
-    monkeypatch.setattr("client.interactive.post_request", fake_post)
     buffer = make_repl(
-        ["/apply", "Write a file", "/quit"], tmp_path, monkeypatch, fake_post
+        ["/apply", "Write a file", "/quit"], tmp_path, monkeypatch, fake_stream
     )
 
     assert payloads[0]["apply_changes"] is True
@@ -194,30 +199,29 @@ def test_repl_apply_toggle_flows_into_the_payload(tmp_path, monkeypatch) -> None
 def test_repl_sends_one_session_id_for_every_message(tmp_path, monkeypatch) -> None:
     payloads = []
 
-    def fake_post(base_url, payload, timeout):
+    def fake_stream(base_url, payload, timeout, on_event):
         payloads.append(payload)
-        return {"plan": {"goal": "G", "steps": []}, "status": "completed", "summary": ""}
+        on_event(done_event(""))
+        return done_event("")
 
-    monkeypatch.setattr("client.interactive.post_request", fake_post)
-    buffer = make_repl(["hello", "now help me code", "/quit"], tmp_path, monkeypatch, fake_post)
+    output = make_repl(["hello", "now help me code", "/quit"], tmp_path, monkeypatch, fake_stream)
 
-    output = buffer.getvalue()
     assert len(payloads) == 2
     assert payloads[0]["session_id"] == payloads[1]["session_id"]
     assert payloads[0]["session_id"]
     # The header shows the session the REPL will reuse.
-    assert payloads[0]["session_id"] in output
+    assert payloads[0]["session_id"] in output.getvalue()
 
 
 def test_repl_new_command_starts_a_fresh_session(tmp_path, monkeypatch) -> None:
     payloads = []
 
-    def fake_post(base_url, payload, timeout):
+    def fake_stream(base_url, payload, timeout, on_event):
         payloads.append(payload)
-        return {"plan": {"goal": "G", "steps": []}, "status": "completed", "summary": ""}
+        on_event(done_event(""))
+        return done_event("")
 
-    monkeypatch.setattr("client.interactive.post_request", fake_post)
-    make_repl(["hello", "/new", "hello again", "/quit"], tmp_path, monkeypatch, fake_post)
+    make_repl(["hello", "/new", "hello again", "/quit"], tmp_path, monkeypatch, fake_stream)
 
     assert len(payloads) == 2
     assert payloads[0]["session_id"] != payloads[1]["session_id"]
@@ -226,16 +230,16 @@ def test_repl_new_command_starts_a_fresh_session(tmp_path, monkeypatch) -> None:
 def test_repl_rejects_an_invalid_repo_switch(tmp_path, monkeypatch) -> None:
     payloads = []
 
-    def fake_post(base_url, payload, timeout):
+    def fake_stream(base_url, payload, timeout, on_event):
         payloads.append(payload)
-        return {"plan": {"goal": "G", "steps": []}, "status": "completed", "summary": ""}
+        on_event(done_event(""))
+        return done_event("")
 
-    monkeypatch.setattr("client.interactive.post_request", fake_post)
     buffer = make_repl(
         [f"/repo {tmp_path / 'missing'}", "Inspect", "/quit"],
         tmp_path,
         monkeypatch,
-        fake_post,
+        fake_stream,
     )
 
     assert payloads[0]["target_repo"] == str(tmp_path.resolve())
@@ -243,11 +247,10 @@ def test_repl_rejects_an_invalid_repo_switch(tmp_path, monkeypatch) -> None:
 
 
 def test_repl_reports_gateway_errors_without_crashing(tmp_path, monkeypatch) -> None:
-    def failing_post(base_url, payload, timeout):
-        raise RuntimeError("gateway unreachable at http://x/v1/agent/run: refused")
+    def failing_stream(base_url, payload, timeout, on_event):
+        raise RuntimeError("gateway unreachable at http://x/v1/agent/run/stream: refused")
 
-    monkeypatch.setattr("client.interactive.post_request", failing_post)
-    buffer = make_repl(["Inspect", "/quit"], tmp_path, monkeypatch, failing_post)
+    buffer = make_repl(["Inspect", "/quit"], tmp_path, monkeypatch, failing_stream)
 
     assert "error:" in buffer.getvalue()
     assert "Bye." in buffer.getvalue()

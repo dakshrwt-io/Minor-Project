@@ -3,11 +3,11 @@
 import json
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
 from fastapi.responses import StreamingResponse
 
 from app.agent import AgentRunner
-from app.contracts import AgentRequest, AgentResponse
+from app.contracts import AgentRequest
 
 
 def build_agent_router(runner: AgentRunner) -> APIRouter:
@@ -15,22 +15,13 @@ def build_agent_router(runner: AgentRunner) -> APIRouter:
 
     router = APIRouter(prefix="/v1/agent", tags=["agent"])
 
-    @router.post("/run", response_model=AgentResponse, status_code=status.HTTP_200_OK)
-    async def run_agent(request: AgentRequest) -> AgentResponse:
-        try:
-            return await runner.run(request)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
     @router.post("/run/stream", status_code=status.HTTP_200_OK)
     async def run_agent_stream(request: AgentRequest) -> StreamingResponse:
         """Stream one run as server-sent events: plan, action, observation, done.
 
-        The non-streaming `/run` endpoint stays the contract of record; this
-        transport only adds live progress. Terminal events are `done` (carries
-        the full AgentResponse) and `error` (carries the HTTP-equivalent code).
+        Terminal events are `done` (carries the full AgentResponse) and
+        `error` (carries the HTTP-equivalent status code: 400 for
+        configuration problems, 502 for provider and SDK failures).
         """
 
         async def event_stream() -> AsyncIterator[str]:

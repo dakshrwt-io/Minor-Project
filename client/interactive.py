@@ -20,7 +20,7 @@ from rich.markup import escape
 from rich.panel import Panel
 
 from client.formatting import FILESYSTEM, TEST, classify_observation, describe_action, excerpt
-from client.terminal import StreamUnavailable, build_payload, post_request, stream_request
+from client.terminal import build_payload, stream_request
 
 _STATUS_BADGES = {
     "completed": "[green]\u2713[/]",
@@ -203,22 +203,9 @@ class InteractiveClient:
             task, self._target_repo, self._apply_changes, session_id=self._session_id
         )
         try:
-            try:
-                event = stream_request(
-                    self._base_url, payload, self._timeout, self._render_live_event
-                )
-            except StreamUnavailable:
-                # Older gateway without the streaming endpoint: block, spin, render once.
-                with self._console.status("[cyan]Agent is working\u2026[/]"):
-                    response = post_request(self._base_url, payload, self._timeout)
-                self._console.print(
-                    Panel(
-                        render_response(response),
-                        title="[bold]Agent result[/]",
-                        border_style="cyan",
-                    )
-                )
-                return
+            event = stream_request(
+                self._base_url, payload, self._timeout, self._render_live_event
+            )
         except RuntimeError as exc:
             self._console.print(f"[bold red]error:[/] {escape(str(exc))}")
             return
