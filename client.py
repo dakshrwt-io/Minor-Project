@@ -16,6 +16,8 @@ from rich.panel import Panel
 
 console = Console()
 
+CHANGE_TOOLS = {"create_file", "write_file", "edit_file"}  # their results contain a diff
+
 HELP = """Commands:
   /apply         turn file changes on or off
   /repo <path>   switch to another repository (starts a new chat)
@@ -31,13 +33,35 @@ def short(text: str, limit: int = 300) -> str:
     return text[:limit] + " ..."
 
 
+def show_diff(text: str) -> None:
+    """Print a change in colour: added lines green, removed lines red."""
+    for line in text.splitlines():
+        if line.startswith(("+++", "---")):
+            style = "bold"  # the file names
+        elif line.startswith("+"):
+            style = "green"
+        elif line.startswith("-"):
+            style = "red"
+        elif line.startswith("@@"):
+            style = "cyan"  # "@@ -3,4 +3,5 @@" = where in the file the change is
+        else:
+            style = "dim"  # unchanged lines around the change
+        # markup=False: print the text exactly, even if it contains [brackets]
+        console.print("   " + line, style=style, markup=False)
+
+
 def show(event: dict) -> None:
     """Print one event from the server."""
     kind = event["type"]
     if kind == "action":
-        console.print(f"[cyan]-> {event['tool']}[/cyan] {escape(str(event['arguments']))}")
+        arguments = short(str(event["arguments"]), 200)  # file contents can be very long
+        console.print(f"[cyan]-> {event['tool']}[/cyan] {escape(arguments)}")
     elif kind == "observation":
-        console.print(f"[dim]   {escape(short(event['result']))}[/dim]")
+        changed_a_file = event["tool"] in CHANGE_TOOLS and not event["result"].startswith("Error")
+        if changed_a_file:
+            show_diff(event["result"])
+        else:
+            console.print(f"[dim]   {escape(short(event['result']))}[/dim]")
     elif kind == "done":
         console.print(Panel(Markdown(event["summary"]), title="Agent", border_style="green"))
     elif kind == "warning":

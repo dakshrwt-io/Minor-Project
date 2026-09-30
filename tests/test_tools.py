@@ -55,11 +55,39 @@ def test_create_write_and_edit(tmp_path):
     write = {"path": "a.txt", "content": "two"}
     edit = {"path": "a.txt", "old_text": "two", "new_text": "three"}
 
-    assert run_tool(repo, "create_file", create, True) == "Created a.txt"
-    assert run_tool(repo, "write_file", write, True) == "Wrote a.txt"
-    assert run_tool(repo, "edit_file", edit, True) == "Edited a.txt"
+    assert run_tool(repo, "create_file", create, True).startswith("Created a.txt")
+    assert run_tool(repo, "write_file", write, True).startswith("Wrote a.txt")
+    assert run_tool(repo, "edit_file", edit, True).startswith("Edited a.txt")
 
     assert (repo / "a.txt").read_text(encoding="utf-8") == "three"
+
+
+def test_edit_shows_diff(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / "shop.py").write_text("price = 10\ntax = 2\n", encoding="utf-8")
+    edit = {"path": "shop.py", "old_text": "price = 10", "new_text": "price = 12"}
+
+    result = run_tool(repo, "edit_file", edit, True)
+
+    assert result.splitlines() == [
+        "Edited shop.py",
+        "--- a/shop.py",
+        "+++ b/shop.py",
+        "@@ -1,2 +1,2 @@",
+        "-price = 10",
+        "+price = 12",
+        " tax = 2",
+    ]
+
+
+def test_long_diff_is_cut(tmp_path):
+    repo = make_repo(tmp_path)
+    big_file = {"path": "big.txt", "content": "line\n" * 500}
+
+    result = run_tool(repo, "create_file", big_file, True)
+
+    assert result.endswith("... (diff cut off, too long)")
+    assert len(result.splitlines()) == 62  # "Created" line + 60 diff lines + the cut-off note
 
 
 def test_edit_needs_exactly_one_match(tmp_path):

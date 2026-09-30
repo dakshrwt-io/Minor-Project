@@ -10,12 +10,14 @@ Safety rules:
 4. Files that usually hold secrets (.env, private keys) are blocked (see is_secret).
 """
 
+import difflib
 from pathlib import Path
 
 from app.repo_summary import SKIP_FOLDERS
 
 MAX_READ_CHARS = 20_000  # don't send huge files to the model
 MAX_SEARCH_RESULTS = 50  # don't send thousands of matching lines to the model
+MAX_DIFF_LINES = 60  # a rewrite of a big file should not flood the screen or the model
 
 # Files that usually contain passwords or API keys. Anything the agent reads is
 # sent to the model provider, so these must never be opened.
@@ -104,21 +106,38 @@ def search_files(repo: Path, text: str) -> str:
 # ---------- tools that change files (only with apply_changes) ----------
 
 
+def make_diff(path: str, old: str, new: str) -> str:
+    """Show what changed, line by line: "-" = removed line, "+" = added line.
+
+    This is the same "unified diff" format git uses. Python's built-in
+    difflib module does all the work.
+    """
+    lines = list(
+        difflib.unified_diff(
+            old.splitlines(), new.splitlines(), f"a/{path}", f"b/{path}", lineterm=""
+        )
+    )
+    if len(lines) > MAX_DIFF_LINES:
+        lines = lines[:MAX_DIFF_LINES] + ["... (diff cut off, too long)"]
+    return "\n".join(lines)
+
+
 def create_file(repo: Path, path: str, content: str) -> str:
     file = safe_path(repo, path)
     if file.exists():
         raise ValueError(f"'{path}' already exists, use write_file or edit_file")
     file.parent.mkdir(parents=True, exist_ok=True)
     file.write_text(content, encoding="utf-8")
-    return f"Created {path}"
+    return f"Created {path}\n" + make_diff(path, "", content)
 
 
 def write_file(repo: Path, path: str, content: str) -> str:
     file = safe_path(repo, path)
     if not file.is_file():
         raise ValueError(f"'{path}' does not exist, use create_file")
+    old_content = file.read_text(encoding="utf-8")
     file.write_text(content, encoding="utf-8")
-    return f"Wrote {path}"
+    return f"Wrote {path}\n" + make_diff(path, old_content, content)
 
 
 def edit_file(repo: Path, path: str, old_text: str, new_text: str) -> str:
@@ -129,8 +148,9 @@ def edit_file(repo: Path, path: str, old_text: str, new_text: str) -> str:
     count = text.count(old_text)
     if count != 1:
         raise ValueError(f"old_text must appear exactly once, found {count} times")
-    file.write_text(text.replace(old_text, new_text), encoding="utf-8")
-    return f"Edited {path}"
+    new_content = text.replace(old_text, new_text)
+    file.write_text(new_content, encoding="utf-8")
+    return f"Edited {path}\n" + make_diff(path, text, new_content)
 
 
 READ_TOOLS = {
