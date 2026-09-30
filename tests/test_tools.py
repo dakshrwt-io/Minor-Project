@@ -40,7 +40,7 @@ def test_write_tools_need_apply_changes(tmp_path):
 
 
 def test_model_only_sees_allowed_tools():
-    read_only = ["list_files", "read_file", "search_files"]
+    read_only = ["list_files", "read_file", "search_files", "search_docs"]
     names = [tool["function"]["name"] for tool in tool_descriptions(False)]
     assert names == read_only
 

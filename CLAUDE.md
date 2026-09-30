@@ -25,7 +25,10 @@ python client.py --repo "C:\path\to\project"         # start chat (second termin
 
 ```text
 app/config.py        settings as plain variables from .env (OPENROUTER_API_KEY, AGENT_MODEL, ...)
-app/tools.py         safe_path() + 5 file tools + TOOL_DESCRIPTIONS + run_tool()
+app/tools.py         safe_path()/is_secret() + all tools (list/read/search_files/search_docs,
+                     create/write/edit with diffs, run_tests) + TOOL_DESCRIPTIONS + run_tool()
+app/rag.py           docs/ folder search by meaning: chunks -> OpenRouter embeddings -> ChromaDB
+                     (data/vector_db), re-embeds only files whose mtime changed
 app/agent.py         run_agent(): THE loop (async generator yielding event dicts)
 app/memory.py        SQLite: load_messages / save_messages / trim
 app/repo_summary.py  AST map of Python files, added to the system prompt on the first message

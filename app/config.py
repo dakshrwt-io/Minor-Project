@@ -26,6 +26,12 @@ MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "10"))
 # SQLite file where chat history is saved.
 MEMORY_DB = os.getenv("AGENT_MEMORY_DB", "data/memory.sqlite3")
 
+# Documentation search (RAG): which folder of the target repository is indexed,
+# which model turns text into numbers ("embeddings"), and where ChromaDB saves them.
+DOCS_FOLDER = os.getenv("AGENT_DOCS_FOLDER", "docs")
+EMBEDDING_MODEL = os.getenv("AGENT_EMBEDDING_MODEL", "openai/text-embedding-3-small")
+VECTOR_DB = os.getenv("AGENT_VECTOR_DB", "data/vector_db")
+
 # Command the run_tests tool runs inside the target repository.
 # The model can only say "run the tests", it can never choose this command.
 # .split() turns "python -m pytest -q" into ["python", "-m", "pytest", "-q"].

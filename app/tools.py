@@ -14,7 +14,7 @@ import difflib
 import subprocess
 from pathlib import Path
 
-from app import config
+from app import config, rag
 from app.repo_summary import SKIP_FOLDERS
 
 MAX_READ_CHARS = 20_000  # don't send huge files to the model
@@ -107,6 +107,29 @@ def search_files(repo: Path, text: str) -> str:
     return "\n".join(results) or f"No matches for '{text}'"
 
 
+def search_docs(repo: Path, query: str) -> str:
+    """Search the docs/ folder by meaning (see rag.py for how).
+
+    The safety check happens here: only files that pass safe_path() are
+    given to rag.py, so secret files are never sent to the embedding model.
+    """
+    repo = repo.resolve()
+    docs = repo / config.DOCS_FOLDER
+    if not docs.is_dir():
+        return f"This repository has no {config.DOCS_FOLDER}/ folder to search."
+    files = []
+    for file in sorted(docs.rglob("*")):
+        relative = file.relative_to(repo).as_posix()
+        if not file.is_file():
+            continue
+        try:
+            safe_path(repo, relative)
+        except ValueError:
+            continue  # secret file or a shortcut leading outside the repo
+        files.append(relative)
+    return rag.search(repo, files, query)
+
+
 # ---------- tools that change files (only with apply_changes) ----------
 
 
@@ -188,6 +211,7 @@ READ_TOOLS = {
     "list_files": list_files,
     "read_file": read_file,
     "search_files": search_files,
+    "search_docs": search_docs,
 }
 
 WRITE_TOOLS = {
@@ -244,6 +268,13 @@ TOOL_DESCRIPTIONS = {
         "Find lines containing some text in all files of the repository (ignores capitals). "
         "Use it to find where a function, class or word is used.",
         {"text": "The text to search for, e.g. a function name."},
+    ),
+    "search_docs": _describe(
+        "search_docs",
+        "Search the project's documentation (the docs/ folder) by MEANING, not exact words. "
+        "Use it for questions about how the project works, setup, rules or design. "
+        "For exact names in code, use search_files instead.",
+        {"query": "A question or description, e.g. 'how do users log in'."},
     ),
     "create_file": _describe(
         "create_file",

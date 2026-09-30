@@ -9,6 +9,7 @@ description = "A simple autonomous coding agent for a college minor project."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "chromadb>=1.0",
     "fastapi>=0.115",
     "httpx>=0.27",
     "mcp>=2.0",

@@ -6,6 +6,7 @@ Start the server first (python -m uvicorn app.main:app), then in a second termin
 
 import argparse
 import json
+import sys
 import uuid
 
 import httpx
@@ -112,6 +113,10 @@ def main() -> None:
     parser.add_argument("--repo", required=True, help="folder of the project to work on")
     parser.add_argument("--server", default="http://127.0.0.1:8000", help="agent server address")
     args = parser.parse_args()
+
+    # Old Windows terminals cannot show some characters (like arrows or emoji) and
+    # would crash. errors="replace" prints "?" for those characters instead.
+    sys.stdout.reconfigure(errors="replace")
 
     repo = args.repo
     apply_changes = False
