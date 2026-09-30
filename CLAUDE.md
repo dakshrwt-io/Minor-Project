@@ -40,8 +40,10 @@ tests/               one test file per app module; FakeClient in test_agent.py f
 
 - Keep code simple: plain functions, dicts, strings. A class only when it must hold state.
   No new abstractions or libraries without a clear reason the user can explain.
-- Safety is in code, not in the prompt: every path goes through `safe_path()`; write tools
-  exist only when `apply_changes=True`; there is no delete or shell tool.
+- Safety is in code, not in the prompt: every path goes through `safe_path()` (blocks escaping
+  the repo and secret files); write tools and `run_tests` exist only when `apply_changes=True`;
+  there is no delete or shell tool. `run_tests` runs only `config.TEST_COMMAND` (never a
+  command from the model), without a shell, with a timeout.
 - Tools return text; errors are text starting with `"Error:"`, never exceptions to the loop.
 - Everything sent to the model is size-limited (file reads, repo map, MCP tools, memory).
 - Memory is saved only after a run finishes (a failed run must not break a session).

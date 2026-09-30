@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app import agent, config, memory
 from app.main import app
-from tests.test_agent import FakeClient, text_reply
+from tests.test_agent import FakeClient, text_reply, usage_for
 
 
 def post(task, repo, session_id="s1"):
@@ -33,7 +33,7 @@ def test_run_streams_answer(tmp_path, monkeypatch):
 
     events = post("hi", tmp_path)
 
-    assert events == [{"type": "done", "summary": "Hello!"}]
+    assert events == [{"type": "done", "summary": "Hello!", "usage": usage_for(1)}]
 
 
 def test_chat_is_remembered_between_messages(tmp_path, monkeypatch):

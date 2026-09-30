@@ -3,6 +3,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from app import config
 from app.agent import run_agent
 
@@ -30,11 +32,23 @@ class FakeClient:
 
     async def create(self, model, messages, tools):
         reply = self.replies.pop(0)
-        return SimpleNamespace(choices=[SimpleNamespace(message=reply)])
+        # Every fake call "uses" 100 input tokens, 10 output tokens and costs $0.001.
+        usage = SimpleNamespace(prompt_tokens=100, completion_tokens=10, cost=0.001)
+        return SimpleNamespace(choices=[SimpleNamespace(message=reply)], usage=usage)
 
 
 async def collect(generator):
     return [event async for event in generator]
+
+
+def usage_for(calls):
+    """The usage totals we expect after this many fake model calls."""
+    return {
+        "model_calls": calls,
+        "input_tokens": 100 * calls,
+        "output_tokens": 10 * calls,
+        "cost": pytest.approx(0.001 * calls),  # approx: decimals like 0.1 + 0.2 are not exact
+    }
 
 
 async def test_text_answer_finishes_immediately(tmp_path):
@@ -42,7 +56,7 @@ async def test_text_answer_finishes_immediately(tmp_path):
 
     events = await collect(run_agent("hello", str(tmp_path), False, [], client))
 
-    assert events == [{"type": "done", "summary": "Hi there!"}]
+    assert events == [{"type": "done", "summary": "Hi there!", "usage": usage_for(1)}]
 
 
 async def test_agent_calls_tool_then_answers(tmp_path):
@@ -83,4 +97,13 @@ async def test_agent_stops_at_step_limit(tmp_path, monkeypatch):
 
     events = await collect(run_agent("loop forever", str(tmp_path), False, [], client))
 
-    assert events[-1] == {"type": "done", "summary": "Stopped after 2 steps without finishing."}
+    summary = "Stopped after 2 steps without finishing."
+    assert events[-1] == {"type": "done", "summary": summary, "usage": usage_for(2)}
+
+
+async def test_usage_is_added_up_over_calls(tmp_path):
+    client = FakeClient([tool_call("list_files", {"path": "."}), text_reply("Done")])
+
+    events = await collect(run_agent("list files", str(tmp_path), False, [], client))
+
+    assert events[-1]["usage"] == usage_for(2)

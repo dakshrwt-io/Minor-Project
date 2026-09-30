@@ -5,19 +5,23 @@ these functions, and we decide whether that is allowed.
 
 Safety rules:
 1. Every path must stay inside the target repository (see safe_path).
-2. Tools that change files only exist when the user passed apply_changes=True.
+2. Tools that change files or run code only exist when the user passed apply_changes=True.
 3. There is no delete tool and no shell tool, so the model cannot ask for them.
 4. Files that usually hold secrets (.env, private keys) are blocked (see is_secret).
 """
 
 import difflib
+import subprocess
 from pathlib import Path
 
+from app import config
 from app.repo_summary import SKIP_FOLDERS
 
 MAX_READ_CHARS = 20_000  # don't send huge files to the model
 MAX_SEARCH_RESULTS = 50  # don't send thousands of matching lines to the model
 MAX_DIFF_LINES = 60  # a rewrite of a big file should not flood the screen or the model
+TEST_TIMEOUT_SECONDS = 60  # stop tests that hang (e.g. an endless loop)
+MAX_TEST_OUTPUT_CHARS = 4_000  # test output can be huge; the model needs the summary
 
 # Files that usually contain passwords or API keys. Anything the agent reads is
 # sent to the model provider, so these must never be opened.
@@ -153,6 +157,33 @@ def edit_file(repo: Path, path: str, old_text: str, new_text: str) -> str:
     return f"Edited {path}\n" + make_diff(path, text, new_content)
 
 
+def run_tests(repo: Path) -> str:
+    """Run the project's tests with the fixed command from config.TEST_COMMAND.
+
+    Safety: the model cannot choose the command, there is no shell
+    (a list of words is run directly, so tricks like "; del *" do nothing),
+    and a timeout stops tests that never end.
+    """
+    try:
+        result = subprocess.run(
+            config.TEST_COMMAND,
+            cwd=repo.resolve(),  # run inside the target repository
+            capture_output=True,  # collect what the tests print instead of showing it
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=TEST_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return f"Error: tests took longer than {TEST_TIMEOUT_SECONDS} seconds and were stopped"
+
+    # Keep the END of the output: that is where test tools print the summary.
+    output = (result.stdout + result.stderr)[-MAX_TEST_OUTPUT_CHARS:]
+    if result.returncode == 0:  # exit code 0 = every test passed
+        return f"Tests PASSED\n{output}"
+    return f"Tests FAILED (exit code {result.returncode})\n{output}"
+
+
 READ_TOOLS = {
     "list_files": list_files,
     "read_file": read_file,
@@ -163,6 +194,7 @@ WRITE_TOOLS = {
     "create_file": create_file,
     "write_file": write_file,
     "edit_file": edit_file,
+    "run_tests": run_tests,  # here because it runs code, so it also needs apply_changes
 }
 
 
@@ -231,6 +263,12 @@ TOOL_DESCRIPTIONS = {
             "old_text": "Exact text to find.",
             "new_text": "Text to put in its place.",
         },
+    ),
+    "run_tests": _describe(
+        "run_tests",
+        "Run the project's test suite and get the result (PASSED or FAILED with details). "
+        "Use it after changing code to check your change works.",
+        {},
     ),
 }
 

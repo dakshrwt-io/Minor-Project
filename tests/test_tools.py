@@ -45,7 +45,7 @@ def test_model_only_sees_allowed_tools():
     assert names == read_only
 
     names = [tool["function"]["name"] for tool in tool_descriptions(True)]
-    assert names == read_only + ["create_file", "write_file", "edit_file"]
+    assert names == read_only + ["create_file", "write_file", "edit_file", "run_tests"]
 
 
 def test_create_write_and_edit(tmp_path):

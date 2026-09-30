@@ -50,6 +50,16 @@ def show_diff(text: str) -> None:
         console.print("   " + line, style=style, markup=False)
 
 
+def show_usage(usage: dict) -> None:
+    """One grey line under the answer, e.g. "2 model calls | 3,120 tokens | $0.0004"."""
+    tokens = usage["input_tokens"] + usage["output_tokens"]
+    console.print(
+        f"[dim]{usage['model_calls']} model calls | {tokens:,} tokens "
+        f"({usage['input_tokens']:,} in, {usage['output_tokens']:,} out) | "
+        f"${usage['cost']:.4f}[/dim]"
+    )
+
+
 def show(event: dict) -> None:
     """Print one event from the server."""
     kind = event["type"]
@@ -60,10 +70,15 @@ def show(event: dict) -> None:
         changed_a_file = event["tool"] in CHANGE_TOOLS and not event["result"].startswith("Error")
         if changed_a_file:
             show_diff(event["result"])
+        elif event["tool"] == "run_tests":
+            colour = "green" if event["result"].startswith("Tests PASSED") else "red"
+            first_line = event["result"].splitlines()[0]
+            console.print(f"   {first_line}", style=f"bold {colour}", markup=False)
         else:
             console.print(f"[dim]   {escape(short(event['result']))}[/dim]")
     elif kind == "done":
         console.print(Panel(Markdown(event["summary"]), title="Agent", border_style="green"))
+        show_usage(event["usage"])
     elif kind == "warning":
         console.print(f"[yellow]Warning: {escape(event['message'])}[/yellow]")
     elif kind == "error":

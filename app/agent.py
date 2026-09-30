@@ -25,6 +25,8 @@ Use the tools to look at files before answering. Never guess what a file contain
 To find where something is defined or used, use search_files instead of opening files one by one.
 Only change files when the task asks for it, and change as little as possible.
 You cannot delete files or run commands.
+After changing code, call run_tests if it is available. If tests fail because of your
+change, fix it and run the tests again.
 When you are done, stop calling tools and reply with a short summary of what you did."""
 
 READ_ONLY_NOTE = "\n\n(Changes are not allowed for this message: only look at files and suggest.)"
@@ -48,6 +50,21 @@ def parse_arguments(text: str) -> dict:
     return {}
 
 
+def add_usage(totals: dict, response) -> None:
+    """Add one model call's token counts (and price) to the running totals.
+
+    Tokens are the pieces of text models read and write (about 4 characters
+    each). Providers charge per token, so this is what the run costs.
+    """
+    totals["model_calls"] += 1
+    usage = getattr(response, "usage", None)
+    if usage is None:  # some providers (and our fake test model) send no usage data
+        return
+    totals["input_tokens"] += usage.prompt_tokens or 0  # what we sent: prompt + history
+    totals["output_tokens"] += usage.completion_tokens or 0  # what the model wrote
+    totals["cost"] += getattr(usage, "cost", None) or 0  # OpenRouter adds the price in dollars
+
+
 async def run_agent(
     task: str, repo: str, apply_changes: bool, messages: list, client=None, mcp=None
 ):
@@ -67,6 +84,7 @@ async def run_agent(
     if not apply_changes:
         task = task + READ_ONLY_NOTE
     messages.append({"role": "user", "content": task})
+    usage = {"model_calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0}
 
     for step in range(config.MAX_STEPS):
         # 1. Ask the model what to do next.
@@ -75,6 +93,7 @@ async def run_agent(
             messages=messages,
             tools=tools,
         )
+        add_usage(usage, response)
         reply = response.choices[0].message
 
         # Save the model's reply in the conversation (as a plain dict).
@@ -92,7 +111,7 @@ async def run_agent(
 
         # 2. No tool calls means the model has answered. We are done.
         if not reply.tool_calls:
-            yield {"type": "done", "summary": reply.content or "(no answer)"}
+            yield {"type": "done", "summary": reply.content or "(no answer)", "usage": usage}
             return
 
         # 3. Run every tool the model asked for and give it the results.
@@ -110,4 +129,5 @@ async def run_agent(
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
 
     # 4. Safety limit reached.
-    yield {"type": "done", "summary": f"Stopped after {config.MAX_STEPS} steps without finishing."}
+    summary = f"Stopped after {config.MAX_STEPS} steps without finishing."
+    yield {"type": "done", "summary": summary, "usage": usage}
