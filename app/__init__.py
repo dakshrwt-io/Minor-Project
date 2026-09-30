@@ -1,1 +1,1 @@
-"""Autonomous coding agent application package."""
+"""Autonomous coding agent."""
